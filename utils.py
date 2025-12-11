@@ -273,7 +273,7 @@ def evaluate(flow_pred, flow_true):
     return epe, aae
 
 
-def charbonnier(x, alpha=0.25, epsilon=1.e-9):
+def charbonnier(x, alpha=0.25, epsilon=1.e-3):
     return torch.pow(torch.pow(x, 2) + epsilon**2, alpha)
 
 
@@ -298,11 +298,11 @@ def photometric_loss(wraped, frame1):
 def unsup_loss(pred_flows, wraped_imgs, frame1, weights=(0.005, 0.01, 0.02, 0.08, 0.32)):
     if len(pred_flows) < 5:
         weights = [0.005]*len(pred_flows)
-    bce = 0
+    photometric = 0
     smooth = 0
     for i in range(len(weights)):
-        bce += weights[i] * photometric_loss(wraped_imgs[i], frame1)
-        smooth += weights[i] * smoothness_loss(pred_flows[i])
+        photometric += weights[i] * photometric_loss(wraped_imgs[i], frame1)
+        smooth += 0.45 * (weights[i] * smoothness_loss(pred_flows[i]))
 
-    loss = bce + smooth
-    return loss, bce, smooth
+    loss = photometric + smooth
+    return loss, photometric, smooth

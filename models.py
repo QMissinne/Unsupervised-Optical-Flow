@@ -135,7 +135,7 @@ class Unsupervised(nn.Module):
 
     def stn(self, flow, frame):
         b, _, h, w = flow.shape
-        frame = F.interpolate(frame, size=(h, w), mode='bilinear', align_corners=True)
+        frame = F.interpolate(frame, size=(h, w), mode='bilinear', align_corners=False)
         flow = torch.transpose(flow, 1, 2)
         flow = torch.transpose(flow, 2, 3)
 
@@ -147,10 +147,171 @@ class Unsupervised(nn.Module):
 
         return warped_frame
 
-    def forward(self, x):
+    # def stn(self, flow, frame):
+    #     """
+    #     Implements Eq (3)-(4) exactly as in the FlowNet / Unsupervised Flow paper.
+    #     flow:  Bx2xhxw   (pixel displacement)
+    #     frame: Bx3xH_fullxW_full
+    #     """
 
+    #     B, C, H_full, W_full = frame.shape
+
+    #     # 1. Upsample
+    #     flow_up = F.interpolate(flow, size=(H_full, W_full), mode='bilinear', align_corners=True)
+
+    #     # 2. Scale displacement correctly
+    #     scale_x = W_full / flow.shape[3]
+    #     scale_y = H_full / flow.shape[2]
+    #     flow_up[:,0] *= scale_x
+    #     flow_up[:,1] *= scale_y
+
+    #     # 2. Base grid: pixel-center coordinates
+    #     # meshgrid gives integer pixel indices i,j
+    #     y, x = torch.meshgrid(
+    #         torch.arange(H_full, device=flow.device),
+    #         torch.arange(W_full, device=flow.device),
+    #         indexing='ij'
+    #     )
+
+    #     # convert to float and add 0.5 (pixel center)
+    #     x = x.float() + 0.5  
+    #     y = y.float() + 0.5
+
+    #     # 3. Apply flow: (x2, y2) = (x1 + u, y1 + v)
+    #     x2 = x.unsqueeze(0) + flow_up[:, 0]   # BxHxW
+    #     y2 = y.unsqueeze(0) + flow_up[:, 1]   # BxHxW
+
+    #     # 4. Normalize to [-1, 1] for grid_sample
+    #     x_norm = (x2 / W_full) * 2 - 1
+    #     y_norm = (y2 / H_full) * 2 - 1
+
+    #     # 5. Create grid: BxHxWx2
+    #     grid = torch.stack((x_norm, y_norm), dim=-1)
+
+    #     # 6. Bilinear sampling (Eq. 4)
+    #     warped = F.grid_sample(
+    #         frame,
+    #         grid,
+    #         mode='bilinear',
+    #         padding_mode='zeros',   # matches paper (not border)
+    #         align_corners=False     # matches bilinear kernel in Eq. 4
+    #     )
+
+    #     return warped
+
+
+
+
+    def forward(self, x):
+        
+        # print("Unsupervised.training:", self.training)
+        # print("Predictor.training:", self.predictor.training)
         flow_predictions = self.predictor(x)
         frame2 = x[:, 3:, :, :]
         warped_images = [self.stn(flow, frame2) for flow in flow_predictions]
 
+        # print("\n=== DEBUG: checking flow outputs inside model ===")
+        # for lvl, f in enumerate(flow_predictions):
+        #     print(f"Level {lvl}: mean={f.mean().item():.6f}, std={f.std().item():.6f}, "
+        #         f"min={f.min().item():.6f}, max={f.max().item():.6f}")
+        # print("===================================================\n")
+
         return flow_predictions, warped_images
+
+# ------------------------------------------------------------------
+#   MINIMAL POSE DECODER (Global Pooling + MLP)
+# ------------------------------------------------------------------
+
+class MinimalPoseDecoder(nn.Module):
+    """
+    A minimal probe head to test what pose information lives in the encoder.
+    Input:  B x C x H x W   (encoder feature map)
+    Output: axisangle (B,1,1,3), translation (B,1,1,3)
+    """
+
+    def __init__(self, in_channels=1024, hidden_dim=256):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+        self.fc1 = nn.Linear(in_channels, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+
+        self.fc_rot = nn.Linear(hidden_dim, 3)
+        self.fc_trans = nn.Linear(hidden_dim, 3)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x = self.pool(x).view(B, C)
+
+        h = F.relu(self.fc1(x))
+        h = F.relu(self.fc2(h))
+
+        axisangle = self.fc_rot(h).view(B, 1, 1, 3)
+        translation = self.fc_trans(h).view(B, 1, 1, 3)
+
+        return axisangle, translation
+
+
+# ------------------------------------------------------------------
+#   ENCODER-ONLY WRAPPER FOR FlowNetS  (NO CHANGES TO FlowNetS CLASS)
+# ------------------------------------------------------------------
+
+class FlowNetSEncoder(nn.Module):
+    """
+    Wraps your existing FlowNetS to expose the encoder only.
+    Does NOT modify FlowNetS itself.
+    """
+
+    def __init__(self, flownet_s: FlowNetS):
+        super().__init__()
+
+        # copy the encoder layers from the provided FlowNetS instance
+        self.conv1 = flownet_s.conv1
+        self.conv2 = flownet_s.conv2
+        self.conv3 = flownet_s.conv3
+        self.conv3_1 = flownet_s.conv3_1
+        self.conv4 = flownet_s.conv4
+        self.conv4_1 = flownet_s.conv4_1
+        self.conv5 = flownet_s.conv5
+        self.conv5_1 = flownet_s.conv5_1
+        self.conv6 = flownet_s.conv6
+
+    def forward(self, x):
+        out_conv2 = self.conv2(self.conv1(x))
+        out_conv3 = self.conv3_1(self.conv3(out_conv2))
+        out_conv4 = self.conv4_1(self.conv4(out_conv3))
+        out_conv5 = self.conv5_1(self.conv5(out_conv4))
+        out_conv6 = self.conv6(out_conv5)
+        return out_conv6  # B,1024,H/64,W/64
+
+
+# ------------------------------------------------------------------
+#   POSE PROBE MODEL (Frozen encoder + trainable MLP)
+# ------------------------------------------------------------------
+
+class FlowPoseProbe(nn.Module):
+    """
+    Uses your existing FlowNetS encoder (frozen) + minimal MLP pose head.
+    """
+
+    def __init__(self, pretrained_flownets=None, hidden_dim=256):
+        super().__init__()
+
+        # If user passes a pretrained FlowNetS, use it.
+        # Otherwise create a fresh one.
+        self.encoder_backbone = pretrained_flownets if pretrained_flownets else FlowNetS()
+
+        # Wrap only the encoder part
+        self.encoder = FlowNetSEncoder(self.encoder_backbone)
+
+        # Freeze FlowNetS weights
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+
+        # Add pose decoder
+        self.pose_decoder = MinimalPoseDecoder(in_channels=1024, hidden_dim=hidden_dim)
+
+    def forward(self, x):
+        features = self.encoder(x)  # B,1024,H/64,W/64
+        axisangle, translation = self.pose_decoder(features)
+        return axisangle, translation

@@ -1,5 +1,5 @@
 import argparse
-
+import matplotlib
 from dataset import *
 from models import FlowNetS, Unsupervised, LightFlowNet, PWC_Net
 import matplotlib.pyplot as plt
@@ -35,7 +35,7 @@ if __name__ == '__main__':
     mymodel.eval()
     frames_transforms = albu.Compose([
         albu.Normalize((0., 0., 0.), (1., 1., 1.)),
-        ToTensor()
+        ToTensorV2()
     ])
     for i in range(0, len(file_names) - 1, 2):
         frame1 = cv2.imread(os.path.join(args.path, file_names[i]))
@@ -48,6 +48,31 @@ if __name__ == '__main__':
 
         with torch.no_grad():
             flow = mymodel(frames)[0]
+
+            # ============================
+            # DEBUG FLOW STATISTICS
+            # ============================
+            print("\n=== RAW FLOW OUTPUT (BEFORE RESIZE) ===")
+            print("Flow shape:", flow.shape)
+            print("Min:", flow.min().item())
+            print("Max:", flow.max().item())
+            print("Mean:", flow.mean().item())
+            print("Std:", flow.std().item())
+            # ============================
+
+            pred_flo = F.interpolate(flow, (h, w), mode='bilinear', align_corners=False)[0]
+
+            # ============================
+            # DEBUG AFTER RESIZE
+            # ============================
+            print("\n=== FLOW AFTER RESIZE ===")
+            print("Flow shape:", pred_flo.shape)
+            print("Min:", pred_flo.min().item())
+            print("Max:", pred_flo.max().item())
+            print("Mean:", pred_flo.mean().item())
+            print("Std:", pred_flo.std().item())
+            print("=======================================\n")
+            # ============================
 
         pred_flo = F.interpolate(flow, (h, w), mode='bilinear', align_corners=False)[0]
         pred_flo = computeImg(pred_flo.cpu().numpy(), verbose=True, savePath=os.path.join("result", path,

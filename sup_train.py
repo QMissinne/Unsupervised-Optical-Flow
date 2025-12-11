@@ -96,6 +96,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', default=8, type=int, metavar='N', help='mini-batch size (default: 8)')
     parser.add_argument('--lr', default=1e-5, type=float, metavar='LR', help='learning rate')
     parser.add_argument("--augment", help="perform data augmentation", action="store_true")
+    parser.add_argument("--resume", help="resume from checkpoint", action="store_true")
 
     args = parser.parse_args()
 
@@ -118,7 +119,7 @@ if __name__ == '__main__':
 
     frames_transforms = albu.Compose([
         albu.Normalize((0., 0., 0.), (1., 1., 1.)),
-        ToTensor()
+        ToTensorV2()
     ])
 
     if args.augment:
@@ -160,12 +161,13 @@ if __name__ == '__main__':
 
     starting_epoch = 0
     best_loss = 100000
-    if os.path.exists(os.path.join("Checkpoints", path, 'training_state.pt')):
-        checkpoint = torch.load(os.path.join("Checkpoints", path, 'training_state.pt'), map_location=device)
-        mymodel.load_state_dict(checkpoint['model_state_dict'])
-        optim.load_state_dict(checkpoint['optimizer_state_dict'])
-        starting_epoch = checkpoint['epoch']
-        best_loss = checkpoint['best_loss']
+    if args.resume:
+        if os.path.exists(os.path.join("Checkpoints", path, 'training_state.pt')):
+            checkpoint = torch.load(os.path.join("Checkpoints", path, 'training_state.pt'), map_location=device)
+            mymodel.load_state_dict(checkpoint['model_state_dict'])
+            optim.load_state_dict(checkpoint['optimizer_state_dict'])
+            starting_epoch = checkpoint['epoch']
+            best_loss = checkpoint['best_loss']
 
     mile_stone1 = 1400000 // train_length
     mile_stone2 = 100000 // train_length
