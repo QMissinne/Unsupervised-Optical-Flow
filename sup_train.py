@@ -4,12 +4,15 @@ from dataset import *
 from models import FlowNetS, PWC_Net, LightFlowNet
 from torch.utils.tensorboard import SummaryWriter
 import warnings
+
+import datetime
+import uuid
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 np.random.seed(seed=1)
 
 PRINT_INTERVAL = 50
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
 
 class AverageMeter(object):
 
@@ -57,7 +60,33 @@ def epoch(model, data, criterion, optimizer=None):
             loss.backward()
             optimizer.step()
 
+        # plot flow debugging:
+        # if optimizer is not None:
+        #     # save flot for each PRINT_INTERVAL
+        #     if i % PRINT_INTERVAL == 0:
+        #         debug_overlay_flow(imgs,
+        #         flow,
+        #         step=12,
+        #         out_dir="visualizations/debug",
+        #         fname=f"epoch_{e:04d}_{i}_train_gt_flow.png", 
+        #         title="Ground Truth Flow Overlay"
+        #         )
+
+        #         debug_flow_correspondence(
+        #         imgs, flow,
+        #         out_dir="visualizations/debug",
+        #         fname=f"epoch_{e:04d}_{i}_train_gt_flow_correspondence.png"
+        #         )
+
         ep_error, aa_error = evaluate(outputs[0].data, flow.data)
+
+        # [DEBUG]: Compare original eval epe vs pixel-consistent EPE -> Proven that scaling is NOT a problem
+        # if i % 1 == 0:
+        #     epe_original = EPE(outputs[0].data, flow.data, real=True).item()
+        #     epe_pixel_consistent = EPE_pixel(outputs[0].data, flow.data).item()
+        #     print(f"[DEBUG] Batch {i}: EPE original = {epe_original:.4f}, EPE pixel-consistent = {epe_pixel_consistent:.4f}")
+
+
         avg_EPE.update(ep_error.item())
         avg_AAE.update(aa_error.item())
         batch_time = time.time() - tic
@@ -100,6 +129,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    short_uid = str(uuid.uuid4())[:8]
+    fingerprint = f"{timestamp}_lr{args.lr}_bs{args.batch_size}_{short_uid}"
+
+    
     if "light" in args.model:
         mymodel = LightFlowNet()
         loss_fnc = None
@@ -110,7 +144,7 @@ if __name__ == '__main__':
         mymodel = FlowNetS()
         loss_fnc = EPE_all
 
-    path = type(mymodel).__name__
+    path = f"{type(mymodel).__name__}/{fingerprint}"
     mymodel.to(device)
     optim = torch.optim.Adam(mymodel.parameters(), args.lr)
 
@@ -169,19 +203,28 @@ if __name__ == '__main__':
             starting_epoch = checkpoint['epoch']
             best_loss = checkpoint['best_loss']
 
-    mile_stone1 = 1400000 // train_length
-    mile_stone2 = 100000 // train_length
+    # mile_stone1 = 1400000 // train_length
+    # mile_stone2 = 100000 // train_length
+    milestone = 100000 // train_length
+
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optim,
+        step_size=milestone,
+        gamma=0.5
+    )
     for e in range(starting_epoch, epochs):
-        
         print("=================\n=== EPOCH " + str(e + 1) + " =====\n=================\n")
         print("learning rate : ", optim.param_groups[0]["lr"])
         avg_epe, avg_aae, loss = epoch(mymodel, train, loss_fnc, optim)
+        scheduler.step()
+        
 
         torch.save({
             'epoch': e,
             'model_state_dict': mymodel.state_dict(),
             'best_loss': best_loss,
             'optimizer_state_dict': optim.state_dict(),
+            'args': vars(args),
         }, os.path.join("Checkpoints", path, 'training_state.pt'))
 
         avg_epe_val, avg_aae_val, loss_val = epoch(mymodel, val, loss_fnc)
@@ -193,6 +236,7 @@ if __name__ == '__main__':
                 'model_state_dict': mymodel.state_dict(),
                 'loss_val': loss_val, 'epe_val': avg_epe_val, 'aae_val': avg_aae_val,
                 'loss': loss, 'epe': avg_epe, 'aae': avg_aae,
+                'args': vars(args),
             }, os.path.join("model_weight", path, 'best_weight.pt'))
 
         avg_epe_test, avg_aae_test, loss_test = epoch(mymodel, test, loss_fnc)
@@ -217,5 +261,6 @@ if __name__ == '__main__':
                 optim.param_groups[0]['lr'] *= 0.5
             elif e % mile_stone2 == 0 and optim.param_groups[0]['lr'] != 1e-5:
                 optim.param_groups[0]['lr'] *= 0.5
-
+        
+        print(f"Epoch {e}: LR = {optim.param_groups[0]['lr']:.2e}")
     tb.close()

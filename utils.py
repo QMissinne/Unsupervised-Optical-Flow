@@ -10,6 +10,14 @@ import matplotlib.pyplot as plt
 TAG_FLOAT = 202021.25
 # testing vim, and git push
 
+# ---------------------------------------------------------
+# DEBUG EPE
+# ---------------------------------------------------------
+
+DEBUG_EPE = False
+DEBUG_EPE_MAXPRINT = 5
+_epe_call_count = 0
+
 
 def readflo(file):
     assert type(file) is str, "file is not str %r" % str(file)
@@ -234,14 +242,63 @@ def disp_function(pred_flo, true_flo):
 
 
 def EPE(flow_pred, flow_true, real=False):
+    global _epe_call_count
+    _epe_call_count += 1
+
+    if DEBUG_EPE and _epe_call_count <= DEBUG_EPE_MAXPRINT:
+        print("\n[EPE DEBUG] call", _epe_call_count, "real=", real)
+        print("  pred shape:", tuple(flow_pred.shape), "dtype:", flow_pred.dtype, "device:", flow_pred.device)
+        print("  true shape:", tuple(flow_true.shape), "dtype:", flow_true.dtype, "device:", flow_true.device)
+        pred_stats = (flow_pred.min().item(), flow_pred.max().item(), flow_pred.mean().item(), flow_pred.std().item())
+        true_stats = (flow_true.min().item(), flow_true.max().item(), flow_true.mean().item(), flow_true.std().item())
+        print("  pred stats min/max/mean/std:", pred_stats)
+        print("  true stats min/max/mean/std:", true_stats)
 
     if real:
         batch_size, _, h, w = flow_true.shape
+        if DEBUG_EPE and _epe_call_count <= DEBUG_EPE_MAXPRINT:
+            print(f"    [real=True] upsamping prediction from {flow_pred.shape[2:]} to {(h, w)}")
         flow_pred = F.interpolate(flow_pred, (h, w), mode='bilinear', align_corners=False)
+
+        if DEBUG_EPE and _epe_call_count <= DEBUG_EPE_MAXPRINT:
+            pred_stats2 = (flow_pred.min().item(), flow_pred.max().item(), flow_pred.mean().item(), flow_pred.std().item())
+            print("    after upsample, pred stats min/max/mean/std:", pred_stats2)
+
     else:
         batch_size, _, h, w = flow_pred.shape
+        if DEBUG_EPE and _epe_call_count <= DEBUG_EPE_MAXPRINT:
+            print(f"    [real=False] upsamping ground truth from {flow_true.shape[2:]} to {(h, w)}")
         flow_true = F.interpolate(flow_true, (h, w), mode='area')
-    return torch.norm(flow_pred - flow_true, 2, 1).mean()
+        if DEBUG_EPE and _epe_call_count <= DEBUG_EPE_MAXPRINT:
+            true_stats2 = (flow_true.min().item(), flow_true.max().item(), flow_true.mean().item(), flow_true.std().item())
+            print("    after upsample, true stats min/max/mean/std:", true_stats2)
+    
+    epe_map = torch.norm(flow_pred - flow_true, 2, 1) # B x H x W
+    epe = epe_map.mean()
+
+    # print("EPE:", epe.item())
+
+    return epe
+
+def EPE_pixel(flow_pred, flow_true):
+    """
+    Pixel-consistent EPE:
+    - upsamples pred to GT resolution
+    - scales vector magnitudes by resolution ratio
+    """
+    _, _, H, W = flow_true.shape
+    _, _, h, w = flow_pred.shape
+
+    flow_pred_up = F.interpolate(flow_pred, (H, W), mode='bilinear', align_corners=False)
+
+    scale_x = W / w
+    scale_y = H / h
+
+    flow_pred_up = flow_pred_up.clone()
+    flow_pred_up[:, 0] *= scale_x
+    flow_pred_up[:, 1] *= scale_y
+
+    return torch.norm(flow_pred_up - flow_true, 2, 1).mean()
 
 
 def EPE_all(flows_pred, flow_true, weights=(0.005, 0.01, 0.02, 0.08, 0.32)):
@@ -306,3 +363,235 @@ def unsup_loss(pred_flows, wraped_imgs, frame1, weights=(0.005, 0.01, 0.02, 0.08
 
     loss = photometric + smooth
     return loss, photometric, smooth
+
+def _debug_test_scaling_effect():
+    import torch
+    import torch.nn.functional as F
+
+    print("\n============================")
+    print("TEST A: scaling effect demo")
+    print("============================")
+
+    # Create a low-res flow field with a known constant displacement:
+    # say "1 pixel at 80x80 grid"
+    pred = torch.zeros(1, 2, 80, 80)
+    pred[:, 0] = 1.0  # +1 in x everywhere
+
+    # Construct the "physically equivalent" full-res flow at 320x320:
+    # if 80->320 is x4, then equivalent displacement is +4 px at 320
+    gt = torch.zeros(1, 2, 320, 320)
+    gt[:, 0] = 4.0
+
+    # Original EPE(real=True): upsamples pred but does NOT scale magnitude.
+    # It will compare ~1 vs 4 => EPE ~3
+    epe_orig = EPE(pred, gt, real=True).item()
+    print("Original EPE(real=True) on 1@80 vs 4@320 ->", epe_orig, "(should be ~3.0 if no scaling)")
+
+def debug_overlay_flow(
+    frames,
+    flow,
+    step=10,
+    max_arrows=2000,
+    out_dir="visualizations/debug",
+    fname="debug_flow.png",
+    title=None
+):
+    """
+    frames: Tensor [6, H, W] or [B, 6, H, W]
+    flow:   Tensor [2, H, W] or [B, 2, H, W]
+    """
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ---- handle batch ----
+    if frames.dim() == 4:
+        frames = frames[0]
+    if flow.dim() == 4:
+        flow = flow[0]
+
+    frames = frames.detach().cpu()
+    flow   = flow.detach().cpu()
+
+    # ---- split frames ----
+    img1 = frames[:3]
+    img2 = frames[3:6]
+
+    def norm_img(x):
+        x = x - x.min()
+        x = x / (x.max() + 1e-6)
+        return x
+
+    img1 = norm_img(img1)
+    img2 = norm_img(img2)
+
+    img1_np = img1.permute(1, 2, 0).numpy()
+    img2_np = img2.permute(1, 2, 0).numpy()
+
+    H, W = img1.shape[1:]
+
+    # ---- overlay image ----
+    overlay = torch.zeros(3, H, W)
+    overlay[0] = img1.mean(0)  # red channel
+    overlay[2] = img2.mean(0)  # blue channel
+    overlay_np = overlay.permute(1, 2, 0).numpy()
+
+    # ---- flow arrows ----
+    fx = flow[0].numpy()
+    fy = flow[1].numpy()
+
+    ys, xs = np.mgrid[0:H:step, 0:W:step]
+    xs = xs.flatten()
+    ys = ys.flatten()
+
+    fx = fx[ys, xs]
+    fy = fy[ys, xs]
+
+    if len(xs) > max_arrows:
+        idx = np.random.choice(len(xs), max_arrows, replace=False)
+        xs, ys, fx, fy = xs[idx], ys[idx], fx[idx], fy[idx]
+
+    # ---- plot ----
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # frame 1
+    axes[0].imshow(img1_np)
+    axes[0].set_title("Frame t")
+    axes[0].axis("off")
+
+    # frame 2
+    axes[1].imshow(img2_np)
+    axes[1].set_title("Frame t+1")
+    axes[1].axis("off")
+
+    # overlay + flow
+    axes[2].imshow(overlay_np)
+    axes[2].quiver(
+        xs, ys, fx, fy,
+        color="white",
+        angles="xy",
+        scale_units="xy",
+        scale=1,
+        width=0.002
+    )
+    axes[2].set_title("Overlay + GT Flow")
+    axes[2].axis("off")
+
+    if title is not None:
+        fig.suptitle(title)
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, fname)
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+    print(f"[DEBUG] Saved flow visualization to: {save_path}")
+
+def debug_flow_correspondence(
+    frames,
+    flow,
+    out_dir="visualizations/debug",
+    fname="correspondence_check.png",
+    patch_size=5
+):
+    """
+    frames: Tensor [6,H,W] or [B,6,H,W]
+    flow:   Tensor [2,H,W] or [B,2,H,W]
+    """
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # -----------------------
+    # Handle batch
+    # -----------------------
+    if frames.dim() == 4:
+        frames = frames[0]
+    if flow.dim() == 4:
+        flow = flow[0]
+
+    frames = frames.detach().cpu()
+    flow   = flow.detach().cpu()
+
+    img1 = frames[:3]
+    img2 = frames[3:6]
+
+    # Normalize images for visualization
+    def norm(x):
+        x = x - x.min()
+        x = x / (x.max() + 1e-6)
+        return x
+
+    img1 = norm(img1).permute(1, 2, 0).numpy()
+    img2 = norm(img2).permute(1, 2, 0).numpy()
+
+    H, W, _ = img1.shape
+
+    # -----------------------
+    # Pick 9 locations
+    # -----------------------
+    ys = [H // 6, H // 2, 5 * H // 6]
+    xs = [W // 6, W // 2, 5 * W // 6]
+
+    points = [(y, x) for y in ys for x in xs]
+
+    half = patch_size // 2
+
+    img1_marked = img1.copy()
+    img2_marked = img2.copy()
+
+    # -----------------------
+    # Paint patches
+    # -----------------------
+    for (y, x) in points:
+        # Clamp
+        y0 = max(0, y - half)
+        y1 = min(H, y + half + 1)
+        x0 = max(0, x - half)
+        x1 = min(W, x + half + 1)
+
+        # Paint in frame t
+        img1_marked[y0:y1, x0:x1] = [1.0, 1.0, 0.0]  # yellow
+
+        # Flow displacement
+        dx = flow[0, y, x].item()
+        dy = flow[1, y, x].item()
+
+        y2 = int(round(y + dy))
+        x2 = int(round(x + dx))
+
+        # Clamp destination
+        y2 = max(0, min(H - 1, y2))
+        x2 = max(0, min(W - 1, x2))
+
+        y0 = max(0, y2 - half)
+        y1 = min(H, y2 + half + 1)
+        x0 = max(0, x2 - half)
+        x1 = min(W, x2 + half + 1)
+
+        # Paint in frame t+1
+        img2_marked[y0:y1, x0:x1] = [1.0, 1.0, 0.0]  # yellow
+
+        # draw line for clarity
+        rr = np.linspace(y, y2, 20).astype(int)
+        cc = np.linspace(x, x2, 20).astype(int)
+        rr = np.clip(rr, 0, H-1)
+        cc = np.clip(cc, 0, W-1)
+        img2_marked[rr, cc] = [1.0, 0.0, 0.0]  # red line
+
+
+    # -----------------------
+    # Stack & save
+    # -----------------------
+    vis = np.concatenate([img1_marked, img2_marked], axis=1)
+
+    plt.figure(figsize=(10, 5))
+    plt.imshow(vis)
+    plt.title("GT Flow Correspondence Check (Frame t → t+1)")
+    plt.axis("off")
+    plt.tight_layout()
+
+    path = os.path.join(out_dir, fname)
+    plt.savefig(path, dpi=150)
+    plt.close()
+
+    print(f"[DEBUG] Saved correspondence check to: {path}")
+
