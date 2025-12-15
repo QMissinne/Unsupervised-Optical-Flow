@@ -65,43 +65,66 @@ def linear_regression_line(x, y):
     return np.polyfit(x, y, 1)
 
 
-def make_visualisation(rot_pred_test, rot_gt_test,
-                       trans_pred_test, trans_gt_test,
-                       rot_pred_train=None, rot_gt_train=None,
-                       trans_pred_train=None, trans_gt_train=None,
+# def make_visualisation(rot_pred_test, rot_gt_test,
+#                        trans_pred_test, trans_gt_test,
+#                        rot_pred_train=None, rot_gt_train=None,
+#                        trans_pred_train=None, trans_gt_train=None,
+#                        save_path="pose_probe_results.png"):
+
+def make_visualisation(rot_pred_train, rot_gt_train,
+                       trans_pred_train, trans_gt_train,
                        save_path="pose_probe_results.png"):
 
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
-    fig.suptitle("Pose Probe – Train (yellow) vs Test (blue)", fontsize=18)
+    fig.suptitle("Pose Prediction Accuracy on Flow Features", fontsize=18)
 
     components = ["X", "Y", "Z"]
 
     # ------------------------------------------------------------------
     # Helper: single scatter panel (train + test + regression lines)
     # ------------------------------------------------------------------
-    def scatter_panel(ax, gt_train, pred_train, gt_test, pred_test, title):
-        # TRAIN scatter -------------------------------------------------
-        if gt_train is not None:
-            ax.scatter(gt_train, pred_train,
-                       s=4, alpha=0.45, color="gold", label="Train")
+# def scatter_panel(ax, gt_train, pred_train, gt_test, pred_test, title):
 
-            m, b = linear_regression_line(gt_train, pred_train)
-            xs = np.linspace(gt_train.min(), gt_train.max(), 200)
-            ax.plot(xs, m * xs + b, color="gold", lw=2,
-                    label="Train regression")
+#     # ---- TRAIN ----
+#     if gt_train is not None:
+#         ax.scatter(gt_train, pred_train,
+#                    s=4, alpha=0.45, color="gold", label="Train")
 
-        # TEST scatter --------------------------------------------------
-        ax.scatter(gt_test, pred_test,
-                   s=4, alpha=0.45, color="dodgerblue", label="Test")
+#         m, b = linear_regression_line(gt_train, pred_train)
+#         xs = np.linspace(gt_train.min(), gt_train.max(), 200)
+#         ax.plot(xs, m * xs + b, color="gold", lw=2,
+#                 label="Train regression")
 
-        m, b = linear_regression_line(gt_test, pred_test)
-        xs = np.linspace(gt_test.min(), gt_test.max(), 200)
-        ax.plot(xs, m * xs + b, color="dodgerblue", lw=2,
-                label="Test regression")
+#         min_v = min(gt_train.min(), pred_train.min())
+#         max_v = max(gt_train.max(), pred_train.max())
+#         ax.plot([min_v, max_v], [min_v, max_v], "k--", linewidth=1)
 
-        # Diagonal perfect-prediction line -----------------------------
-        min_v = min(gt_test.min(), pred_test.min())
-        max_v = max(gt_test.max(), pred_test.max())
+#     # ---- TEST (optional) ----
+#     if gt_test is not None:
+#         ax.scatter(gt_test, pred_test,
+#                    s=4, alpha=0.45, color="dodgerblue", label="Test")
+
+#         m, b = linear_regression_line(gt_test, pred_test)
+#         xs = np.linspace(gt_test.min(), gt_test.max(), 200)
+#         ax.plot(xs, m * xs + b, color="dodgerblue", lw=2,
+#                 label="Test regression")
+
+#     ax.set_title(title)
+#     ax.set_xlabel("GT")
+#     ax.set_ylabel("Pred")
+#     ax.legend()
+
+    def scatter_panel(ax, gt, pred, title):
+        ax.scatter(gt, pred,
+                s=4, alpha=0.45, color="gold", label="Train")
+
+        m, b = linear_regression_line(gt, pred)
+        xs = np.linspace(gt.min(), gt.max(), 200)
+        ax.plot(xs, m * xs + b, color="gold", lw=2,
+                label="Train regression")
+
+        min_v = min(gt.min(), pred.min())
+        max_v = max(gt.max(), pred.max())
         ax.plot([min_v, max_v], [min_v, max_v], "k--", linewidth=1)
 
         ax.set_title(title)
@@ -109,31 +132,49 @@ def make_visualisation(rot_pred_test, rot_gt_test,
         ax.set_ylabel("Pred")
         ax.legend()
 
+    
     # ------------------------------------------------------------------
     # 1) Rotation scatter plots (3 components)
     # ------------------------------------------------------------------
+    # for i in range(3):
+    #     scatter_panel(
+    #         axs[0, i],
+    #         rot_gt_train[:, i] if rot_gt_train is not None else None,
+    #         rot_pred_train[:, i] if rot_pred_train is not None else None,
+    #         rot_gt_test[:, i],
+    #         rot_pred_test[:, i],
+    #         f"Rotation Component: {components[i]}"
+    #     )
+
     for i in range(3):
         scatter_panel(
             axs[0, i],
-            rot_gt_train[:, i] if rot_gt_train is not None else None,
-            rot_pred_train[:, i] if rot_pred_train is not None else None,
-            rot_gt_test[:, i],
-            rot_pred_test[:, i],
+            rot_gt_train[:, i],
+            rot_pred_train[:, i],
             f"Rotation Component: {components[i]}"
         )
 
     # ------------------------------------------------------------------
     # 2) Translation scatter plots (3 components)
     # ------------------------------------------------------------------
+    # for i in range(3):
+    #     scatter_panel(
+    #         axs[1, i],
+    #         trans_gt_train[:, i] if trans_gt_train is not None else None,
+    #         trans_pred_train[:, i] if trans_pred_train is not None else None,
+    #         trans_gt_test[:, i],
+    #         trans_pred_test[:, i],
+    #         f"Translation Component: {components[i]}"
+    #     )
+
     for i in range(3):
         scatter_panel(
             axs[1, i],
-            trans_gt_train[:, i] if trans_gt_train is not None else None,
-            trans_pred_train[:, i] if trans_pred_train is not None else None,
-            trans_gt_test[:, i],
-            trans_pred_test[:, i],
+            trans_gt_train[:, i],
+            trans_pred_train[:, i],
             f"Translation Component: {components[i]}"
         )
+
 
     # ------------------------------------------------------------------
     plt.tight_layout()
@@ -170,14 +211,19 @@ def main(args):
 
     save_path = os.path.join("visualizations", args.output)
 
+    # make_visualisation(
+    #     rot_pred_test, rot_gt_test,
+    #     trans_pred_test, trans_gt_test,
+    #     rot_pred_train, rot_gt_train,
+    #     trans_pred_train, trans_gt_train,
+    #     save_path
+    # )
+
     make_visualisation(
-        rot_pred_test, rot_gt_test,
-        trans_pred_test, trans_gt_test,
         rot_pred_train, rot_gt_train,
         trans_pred_train, trans_gt_train,
-        save_path
+        save_path=save_path
     )
-
 
 
 if __name__ == "__main__":

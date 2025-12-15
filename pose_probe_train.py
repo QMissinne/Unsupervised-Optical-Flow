@@ -145,9 +145,9 @@ def epoch(model, dataloader, optimizer=None):
 # -------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, required=True,
+    parser.add_argument("--model_checkpoint", type=str, required=True,
                         help="Path to pretrained FlowNetS (supervised or unsupervised).")
-    parser.add_argument("--root", type=str, required=True,
+    parser.add_argument("--data_root", type=str, required=True,
                         help="Dataset root path for pose data.")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -158,8 +158,8 @@ if __name__ == "__main__":
     # 1. Load pretrained FlowNetS
     # -------------------------------------------------------------
     pretrained = FlowNetS()
-    print("Loading pretrained weights from:", args.checkpoint)
-    state = torch.load(args.checkpoint, map_location=device)
+    print("Loading pretrained weights from:", args.model_checkpoint)
+    state = torch.load(args.model_checkpoint, map_location=device)
     pretrained.load_state_dict(state["model_state_dict"], strict=False)
 
     # -------------------------------------------------------------
@@ -184,13 +184,13 @@ if __name__ == "__main__":
     print(">>> Loading Supervised Pose Dataset (TartanPoseDataset)")
     train_loader, val_loader, test_loader = getPoseDataloaders(
         batch_size=args.batch_size,
-        root=args.root
+        root=args.data_root
     )
 
     # -------------------------------------------------------------
     # 4. Logging + checkpoint paths
     # -------------------------------------------------------------
-    exp_name = "PoseProbe_" + os.path.basename(args.checkpoint).replace(".pt", "")
+    exp_name = "PoseProbe_" + os.path.basename(args.model_checkpoint).replace(".pt", "")
     logdir = os.path.join("runs", exp_name)
     ckptdir = os.path.join("Checkpoints", exp_name)
     os.makedirs(ckptdir, exist_ok=True)
